@@ -1,11 +1,14 @@
+# main.py
 # -*- coding: utf-8 -*-
 """
 Created on Sun Jul 12 11:02:06 2020
-@author: OHyic
+@author:
 """
 import os
 import concurrent.futures
-import pandas as pd  # Excel’e yazmak için
+import pandas as pd
+import re
+
 from GoogleImageScraper import GoogleImageScraper
 from patch import webdriver_executable
 
@@ -28,33 +31,47 @@ def read_search_keys_from_file(filename="search_keys.txt"):
         print(f"Dosya bulunamadı: {txt_path}. Varsayılan kelimeler kullanılacak.")
     return list(set(keys))
 
+def sanitize_search_key(search_key):
+    """
+    Windows’ta yasaklı karakterler: < > : " / \ | ? *
+    Bu regex ifadesiyle hepsini '_' karakterine dönüştürüyoruz.
+    Örn: "ROBOT FIRÇA NO:3" -> "ROBOT FIRÇA NO_3"
+    """
+    return re.sub(r'[<>:"/\\|?*]', '_', search_key)
 
 def worker_thread(search_key):
     """
     Her bir 'search_key' için GoogleImageScraper'ı çalıştırır,
     bulduğu görselleri indirir ve (search_key, url, local_path) şeklinde döndürür.
     """
+    # Geçersiz karakterleri temizle, sonra GoogleImageScraper'a ver
+    safe_key = sanitize_search_key(search_key)
+
     image_scraper = GoogleImageScraper(
         webdriver_path,
         image_path,
-        search_key,
+        safe_key,          # Temizlenmiş klasör adı
         number_of_images,
         headless,
         min_resolution,
         max_resolution,
         max_missed
     )
+
     image_urls = image_scraper.find_image_urls()
     downloaded_images = image_scraper.save_images(image_urls, keep_filenames)
 
     # downloaded_images => [(url, local_path), (url, local_path), ...]
     result = []
     for (url, local_path) in downloaded_images:
+        # Excel'e orijinal search_key'i (temizlenmemiş metni) kaydetmek istersen:
+        # result.append((search_key, url, local_path))
+        #
+        # Ama hangi klasörde olduğunu da tam bilmek istersen safe_key yazabilirsin.
         result.append((search_key, url, local_path))
 
     del image_scraper
     return result
-
 
 def backup_excel_if_exists(excel_name="image_urls.xlsx", backup_folder="backup"):
     """
@@ -66,15 +83,12 @@ def backup_excel_if_exists(excel_name="image_urls.xlsx", backup_folder="backup")
         if not os.path.exists(backup_folder):
             os.makedirs(backup_folder)
 
-        # backup klasöründeki mevcut dosyaları inceleyip bir sonraki numarayı bulalım
-        existing_backups = os.listdir(backup_folder)  # ['image_urls_001.xlsx', 'image_urls_002.xlsx', ...]
-        # Sadece "image_urls_XXX.xlsx" formatına uyanları filtreleyelim
+        existing_backups = os.listdir(backup_folder)  # ['image_urls_001.xlsx', ...]
         version_nums = []
         for f in existing_backups:
             # f örn: "image_urls_003.xlsx"
             if f.startswith("image_urls_") and f.endswith(".xlsx"):
                 try:
-                    # XXX kısmını alıp integer'a çevir
                     num_str = f.replace("image_urls_", "").replace(".xlsx", "")
                     version_nums.append(int(num_str))
                 except ValueError:
@@ -87,7 +101,6 @@ def backup_excel_if_exists(excel_name="image_urls.xlsx", backup_folder="backup")
         print(f"[INFO] Eski Excel dosyası bulundu. Yedekleniyor: {backup_path}")
         os.rename(excel_name, backup_path)
 
-
 if __name__ == "__main__":
     # 1) WebDriver yolu
     webdriver_path = os.path.normpath(
@@ -98,15 +111,15 @@ if __name__ == "__main__":
 
     # 3) Aranacak kelimeleri 'search_keys.txt' üzerinden okumaya çalış
     search_keys = read_search_keys_from_file("search_keys.txt")
-    
+
     print("DEBUG | Dosyadan gelen search_keys:", search_keys)
     if not search_keys:
         search_keys = ["car", "stars"]
         print("DEBUG | search_keys.txt boş veya bulunamadı. Varsayılan listeye geçildi:", search_keys)
 
     # Parametreler
-    number_of_images = 5     # İndirilecek görsel sayısı
-    headless = False           # True => Chrome GUI göstermez
+    number_of_images = 5      # İndirilecek görsel sayısı
+    headless = False          # True => Chrome arayüzünü kapatır
     min_resolution = (0, 0)
     max_resolution = (9999, 9999)
     max_missed = 10
